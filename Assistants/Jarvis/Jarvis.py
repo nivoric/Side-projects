@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import datetime as dt
+import json
 import operator
 import os
 import platform
@@ -19,6 +20,7 @@ from pathlib import Path
 
 
 NOTES_FILE = Path(__file__).with_name("jarvis_notes.txt")
+PROJECTS_FILE = Path(__file__).with_name("jarvis_projects.json")
 JARVIS_NAME = os.getenv("JARVIS_NAME", "Zido")
 
 _OPERATORS = {
@@ -69,6 +71,60 @@ def _read_notes() -> str:
 		return "You have no notes yet."
 	notes = NOTES_FILE.read_text(encoding="utf-8").strip()
 	return notes or "You have no notes yet."
+
+
+def _load_projects() -> dict[str, list[str]]:
+	if not PROJECTS_FILE.exists():
+		return {}
+	try:
+		projects = json.loads(PROJECTS_FILE.read_text(encoding="utf-8"))
+	except (OSError, json.JSONDecodeError):
+		return {}
+	return projects if isinstance(projects, dict) else {}
+
+
+def _save_projects(projects: dict[str, list[str]]) -> None:
+	PROJECTS_FILE.write_text(json.dumps(projects, indent=2) + "\n", encoding="utf-8")
+
+
+def _add_project(project_name: str) -> str:
+	project_name = project_name.strip()
+	if not project_name:
+		return "Tell me the project name."
+	projects = _load_projects()
+	if project_name in projects:
+		return f"The project '{project_name}' already exists."
+	projects[project_name] = []
+	_save_projects(projects)
+	return f"Added project '{project_name}'."
+
+
+def _add_subtask(subtask_request: str) -> str:
+	project_name, separator, subtask = subtask_request.partition("|")
+	project_name = project_name.strip()
+	subtask = subtask.strip() if separator else ""
+	if not project_name or not subtask:
+		return "Use: project subtask <project> | <subtask>."
+	projects = _load_projects()
+	if project_name not in projects:
+		return f"I could not find the project '{project_name}'. Add it first."
+	projects[project_name].append(subtask)
+	_save_projects(projects)
+	return f"Added subtask to '{project_name}'."
+
+
+def _list_projects() -> str:
+	projects = _load_projects()
+	if not projects:
+		return "You have no projects yet."
+	lines = []
+	for project_name, subtasks in projects.items():
+		lines.append(f"{project_name}:")
+		if subtasks:
+			lines.extend(f"  - {subtask}" for subtask in subtasks)
+		else:
+			lines.append("  (no subtasks)")
+	return "\n".join(lines)
 
 
 def _create_obsidian_note(note_request: str) -> str:
@@ -130,7 +186,8 @@ def handle_command(command: str) -> tuple[str, bool]:
 		return (
 			"Commands: whoami, time, date, system info, calculate 2 + 2, "
 			"remember <note>, read notes, obsidian note <title> | <content>, "
-			"open <site or search>, run <shell command>, quit.",
+			"project add <name>, project subtask <project> | <subtask>, "
+			"project list, open <site or search>, run <shell command>, clear, quit.",
 			False,
 		)
 	if normalized in {"whoami", "who am i", "my name"}:
@@ -152,6 +209,12 @@ def handle_command(command: str) -> tuple[str, bool]:
 		return _save_note(note), False
 	if normalized in {"read notes", "show notes", "notes"}:
 		return _read_notes(), False
+	if normalized.startswith("project add "):
+		return _add_project(original[len("project add "):]), False
+	if normalized.startswith("project subtask "):
+		return _add_subtask(original[len("project subtask "):]), False
+	if normalized in {"project list", "projects", "list projects"}:
+		return _list_projects(), False
 	if normalized.startswith(("obsidian note ", "create obsidian note ")):
 		request = re.sub(r"^(?:create )?obsidian note\s+", "", original, flags=re.IGNORECASE)
 		try:
@@ -181,6 +244,9 @@ def main() -> None:
 		except (EOFError, KeyboardInterrupt):
 			print("\nShutting down.")
 			break
+		if command.strip().lower() == "clear":
+			os.system("cls" if os.name == "nt" else "clear")
+			continue
 		response, should_exit = handle_command(command)
 		print(f"Jarvis: {response}")
 		if should_exit:
